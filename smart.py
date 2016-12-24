@@ -1,6 +1,8 @@
 import ast
 import time
 import os
+import re
+from exprs import exprs as exprs_db
 
 
 def get_heads(l):
@@ -34,7 +36,6 @@ class ASTTranslator(object):
 
     def walk(self, node):
         result = []
-        # print(node, dir(node))
         node_name = node.__class__.__name__
         if node_name in self.node_map:
             node_name = self.node_map[node_name]
@@ -55,7 +56,6 @@ class ASTTranslator(object):
                 result = list([self.walk(s) for s in node])
         else:
             result += [node_name, ]
-        # print(node_name)
         return result
 
 
@@ -70,15 +70,11 @@ def comparable(v):
 
 class ASTPatternMatcher(object):
     def get_common_expr(self, ast_list):
-        # print(ast_list)
-        # time.sleep(1)
         result = []
 
         heads = get_heads(ast_list)
 
         tails = get_tails(ast_list)
-
-        # if all([isinstance(h, tuple) for h in heads]): result += '('
 
         if all([h == [] for h in heads]): return ''
         if any([h == [] for h in heads]): return '*'
@@ -90,7 +86,6 @@ class ASTPatternMatcher(object):
                 result.append('?')  # differ
         else:
             result += [self.get_common_expr(heads)]
-        # print(result)
         result += self.get_common_expr(tails)
         return result
 
@@ -99,9 +94,7 @@ class ASTGenerator(object):
     def __init__(self, code):
         self.code = code
         self.ast = ast.parse(code)
-        # print(ast.dump(self.ast))
         self.parsed_ast = ASTTranslator().walk(self.ast)[1]
-        # print(self.parsed_ast)
 
 
 class CodeSearcher(object):
@@ -110,11 +103,8 @@ class CodeSearcher(object):
 
     def match_expr(self, query):
         expr, pattern = query
-        # print(expr, pattern)
-        # print(time.sleep(1))
 
         heads = get_heads([expr, pattern])
-        # print('Heads: ', heads)
         tails = get_tails([expr, pattern])
 
         if all([h == [] for h in heads]): return True
@@ -146,11 +136,29 @@ class ExprSearcher(object):
     def __init__(self, db):
         self.db = db
 
-    def search(self, tag):
+    def extract_tags(self, s):
+        m = re.findall(r'#([a-zA-Z^:space:]+)', s)
+        return m
+
+    def extract_cprops(self, s):
+        m = re.findall(r'cprop ([a-z0-9]+)', s)
+        return m
+
+    def search(self, q, fuzzy=False):
         result = []
-        for ex, tags in self.db:
-            if any([tag in t for t in tags]):
+        tags = self.extract_tags(q)
+        cprops = self.extract_cprops(q)
+        for s, ex in self.db:
+            if tags:
+                db_tags = self.extract_tags(s)
+                if set(db_tags)&set(tags):
+                    result.append(ex)
+                continue
+
+            db_cprops = self.extract_cprops(s)
+            if set(db_cprops)&set(cprops) or fuzzy:
                 result.append(ex)
+                continue
         return result
 
 
@@ -159,38 +167,27 @@ if __name__ == "__main__":
     exprs = []
     codes = []
     for f in os.listdir(BASE_DIR):
-        code = open(os.path.join(BASE_DIR, f)).read()
-        # print(code)
-        ast_expr = ASTGenerator(code).parsed_ast[0]
-        # print(ast_expr)
-        # print('*'*80)
-        exprs.append(ast_expr)
-        codes.append(code)
+        path = os.path.join(BASE_DIR, f)
+        if os.path.isfile(path):
+            code = open(path).read()
+            ast_expr = ASTGenerator(code).parsed_ast[0]
+            exprs.append(ast_expr)
+            codes.append(code)
 
     search_code = open(os.path.join('codes/search', 'source1.py')).read()
 
     ast_pm = ASTPatternMatcher()
     common_expr = ast_pm.get_common_expr(exprs)
-    print(common_expr)
 
-    # TODO: extract via re cprop, cprops, tags and search among them
     # TODO: add CodeItem class
-    # TODO: add separate DB for expr <-> tag
-    tags = [
-        'class with prop v1',
-        'cprop v1',  # class prop
-        '#base cprop v1'
-    ]
 
     code_db = [(common_expr, codes)]
-    expr_db = [(common_expr, tags)]
     s = CodeSearcher(code_db)
 
     expr = ASTGenerator(search_code).parsed_ast[0]
     for code in s.search(expr):
         print('By code', code)
 
-    es = ExprSearcher(expr_db)
-    for expr in es.search(tags[0]):
-        for code in s.search(expr):
-            print('By tag', code)
+    es = ExprSearcher(exprs_db)
+    for expr in es.search('#base cprop v1', fuzzy=True):
+        print('By expr: ', expr)

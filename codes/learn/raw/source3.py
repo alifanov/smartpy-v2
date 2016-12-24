@@ -1,0 +1,2 @@
+class N:
+    n = 'Hi'
